@@ -1,0 +1,158 @@
+package com.mediconnect.service;
+
+import com.mediconnect.dto.ai.ProcessedDocumentContent;
+import com.mediconnect.entity.MedicalReport;
+import com.mediconnect.entity.PatientCase;
+import com.mediconnect.storage.LocalStorageService;
+import com.mediconnect.storage.StorageUploadResult;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class DocumentProcessingServiceTest {
+
+    private static final byte[] SAMPLE_TEXT_PDF = (
+            "%PDF-1.4\n" +
+            "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n" +
+            "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n" +
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n" +
+            "4 0 obj\n<< /Length 120 >>\nstream\n" +
+            "BT\n/F1 12 Tf\n50 700 Td\n(Complete Blood Count Report: Hemoglobin 10.2 g/dL Normal: 12-15. Fasting Blood Glucose 140 mg/dL.) Tj\nET\n" +
+            "endstream\nendobj\n" +
+            "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n" +
+            "xref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000244 00000 n \n0000000414 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n489\n%%EOF\n"
+    ).getBytes(StandardCharsets.US_ASCII);
+
+    private static final byte[] SAMPLE_EMPTY_PAGE_PDF = (
+            "%PDF-1.4\n" +
+            "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n" +
+            "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n" +
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n" +
+            "xref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n198\n%%EOF\n"
+    ).getBytes(StandardCharsets.US_ASCII);
+
+    private final Map<String, byte[]> fileStorage = new HashMap<>();
+
+    private final LocalStorageService localStorageService = new LocalStorageService() {
+        @Override
+        public StorageUploadResult storeFile(String relativePath, byte[] content, String contentType) {
+            fileStorage.put(relativePath, content);
+            return new StorageUploadResult(relativePath, (long) content.length, contentType);
+        }
+
+        @Override
+        public byte[] loadFile(String relativePath) {
+            return fileStorage.get(relativePath);
+        }
+
+        @Override
+        public void deleteFile(String relativePath) {
+            fileStorage.remove(relativePath);
+        }
+
+        @Override
+        public boolean fileExists(String relativePath) {
+            return fileStorage.containsKey(relativePath);
+        }
+    };
+
+    private DocumentProcessingService documentProcessingService;
+    private PatientCase testCase;
+
+    @BeforeEach
+    void setUp() {
+        fileStorage.clear();
+        documentProcessingService = new DocumentProcessingService(localStorageService);
+        testCase = new PatientCase();
+        testCase.setId("case-12345");
+    }
+
+    @Test
+    void processDocument_withValidTextPdf_extractsReadableText() {
+        fileStorage.put("cases/case-12345/cbc.pdf", SAMPLE_TEXT_PDF);
+
+        MedicalReport report = new MedicalReport();
+        report.setId("rep-1");
+        report.setName("cbc_blood_test.pdf");
+        report.setType("application/pdf");
+        report.setStorageReference("cases/case-12345/cbc.pdf");
+        report.setPatientCase(testCase);
+
+        ProcessedDocumentContent result = documentProcessingService.processDocument(report);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getFileName()).isEqualTo("cbc_blood_test.pdf");
+        assertThat(result.getMimeType()).isEqualTo("application/pdf");
+        assertThat(result.isHasTextContent()).isTrue();
+        assertThat(result.isScannedPdf()).isFalse();
+        assertThat(result.getExtractedText()).contains("Hemoglobin 10.2 g/dL");
+        assertThat(result.getExtractedText()).contains("Glucose 140 mg/dL");
+        assertThat(result.getRawBytes()).isNotEmpty();
+    }
+
+    @Test
+    void processDocument_withScannedOrImagePdf_marksAsScanned() {
+        fileStorage.put("cases/case-12345/scan.pdf", SAMPLE_EMPTY_PAGE_PDF);
+
+        MedicalReport report = new MedicalReport();
+        report.setId("rep-scanned");
+        report.setName("scanned_prescription.pdf");
+        report.setType("application/pdf");
+        report.setStorageReference("cases/case-12345/scan.pdf");
+        report.setPatientCase(testCase);
+
+        ProcessedDocumentContent result = documentProcessingService.processDocument(report);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getFileName()).isEqualTo("scanned_prescription.pdf");
+        assertThat(result.isHasTextContent()).isFalse();
+        assertThat(result.isScannedPdf()).isTrue();
+        assertThat(result.getRawBytes()).isNotEmpty();
+    }
+
+    @Test
+    void processDocument_withImageReport_packagesMultimodalContent() {
+        byte[] imageBytes = new byte[]{1, 2, 3, 4, 5, 6, 7, 8};
+        fileStorage.put("cases/case-12345/xray.png", imageBytes);
+
+        MedicalReport report = new MedicalReport();
+        report.setId("rep-2");
+        report.setName("chest_xray.png");
+        report.setType("image/png");
+        report.setIsImage(true);
+        report.setStorageReference("cases/case-12345/xray.png");
+        report.setPatientCase(testCase);
+
+        ProcessedDocumentContent result = documentProcessingService.processDocument(report);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getFileName()).isEqualTo("chest_xray.png");
+        assertThat(result.getMimeType()).isEqualTo("image/png");
+        assertThat(result.isImage()).isTrue();
+        assertThat(result.isHasTextContent()).isFalse();
+        assertThat(result.getRawBytes()).isEqualTo(imageBytes);
+        assertThat(result.getExtractionNote()).contains("Medical image file");
+    }
+
+    @Test
+    void processDocument_withEmptyFile_handlesGracefully() {
+        fileStorage.put("cases/case-12345/empty.pdf", new byte[0]);
+
+        MedicalReport report = new MedicalReport();
+        report.setId("rep-3");
+        report.setName("empty_document.pdf");
+        report.setType("application/pdf");
+        report.setStorageReference("cases/case-12345/empty.pdf");
+        report.setPatientCase(testCase);
+
+        ProcessedDocumentContent result = documentProcessingService.processDocument(report);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getExtractionNote()).contains("Document file is empty");
+    }
+}

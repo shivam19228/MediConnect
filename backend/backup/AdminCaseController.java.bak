@@ -1,0 +1,128 @@
+package com.mediconnect.controller;
+
+import com.mediconnect.dto.request.SubmitDoctorReviewRequest;
+import com.mediconnect.dto.response.DoctorCaseDetailResponse;
+import com.mediconnect.dto.response.DoctorCaseSummaryResponse;
+import com.mediconnect.dto.response.DoctorReviewDto;
+import com.mediconnect.dto.response.DoctorTriageStatsResponse;
+import com.mediconnect.dto.response.PagedResponse;
+import com.mediconnect.entity.enums.ReviewStatus;
+import com.mediconnect.service.DoctorCaseService;
+import jakarta.validation.Valid;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Controller providing administrative oversight and supervisor review override capabilities.
+ */
+@RestController
+@RequestMapping("/api/v1/admin")
+@PreAuthorize("hasRole('ADMIN')")
+public class AdminCaseController {
+
+    private final DoctorCaseService doctorCaseService;
+    private final com.mediconnect.service.AiReportService aiReportService;
+
+    public AdminCaseController(
+            DoctorCaseService doctorCaseService,
+            com.mediconnect.service.AiReportService aiReportService) {
+        this.doctorCaseService = doctorCaseService;
+        this.aiReportService = aiReportService;
+    }
+
+    /**
+     * Admin view of all submitted patient cases.
+     */
+    @GetMapping("/cases")
+    public ResponseEntity<PagedResponse<DoctorCaseSummaryResponse>> getAllCases(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) ReviewStatus status,
+            @RequestParam(required = false) Boolean urgentOnly,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false, defaultValue = "urgent") String sortBy,
+            @RequestParam(required = false, defaultValue = "DESC") String sortDirection,
+            Authentication authentication) {
+
+        PagedResponse<DoctorCaseSummaryResponse> response = doctorCaseService.getDoctorCases(
+                page, size, status, urgentOnly, search, sortBy, sortDirection, authentication);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Admin view of single case clinical details.
+     */
+    @GetMapping("/cases/{id}")
+    public ResponseEntity<DoctorCaseDetailResponse> getCaseDetail(
+            @PathVariable String id,
+            Authentication authentication) {
+
+        DoctorCaseDetailResponse response = doctorCaseService.getDoctorCaseDetail(id, authentication);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Admin override or reassignment of a case review.
+     */
+    @PostMapping("/cases/{id}/review")
+    public ResponseEntity<DoctorReviewDto> submitReviewOverride(
+            @PathVariable String id,
+            @Valid @RequestBody SubmitDoctorReviewRequest request,
+            Authentication authentication) {
+
+        DoctorReviewDto response = doctorCaseService.submitOrUpdateReview(id, request, authentication);
+        return ResponseEntity.ok(response);
+    }
+
+    @PutMapping("/cases/{id}/review")
+    public ResponseEntity<DoctorReviewDto> updateReviewOverride(
+            @PathVariable String id,
+            @Valid @RequestBody SubmitDoctorReviewRequest request,
+            Authentication authentication) {
+
+        DoctorReviewDto response = doctorCaseService.submitOrUpdateReview(id, request, authentication);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Admin view of triage queue statistics.
+     */
+    @GetMapping("/triage/stats")
+    public ResponseEntity<DoctorTriageStatsResponse> getTriageStats(Authentication authentication) {
+        DoctorTriageStatsResponse response = doctorCaseService.getTriageStats(authentication);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Admin generation or regeneration of AI clinical summary for a submitted case.
+     */
+    @PostMapping("/cases/{id}/generate-report")
+    public ResponseEntity<com.mediconnect.dto.response.GeneratedReportSummaryDto> generateReport(
+            @PathVariable String id,
+            Authentication authentication) {
+
+        com.mediconnect.dto.response.GeneratedReportSummaryDto response = aiReportService.generateCaseReport(id, authentication);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Admin retrieval of an existing AI clinical summary.
+     */
+    @GetMapping("/cases/{id}/report")
+    public ResponseEntity<com.mediconnect.dto.response.GeneratedReportSummaryDto> getReport(
+            @PathVariable String id,
+            Authentication authentication) {
+
+        com.mediconnect.dto.response.GeneratedReportSummaryDto response = aiReportService.getCaseReport(id, authentication);
+        return ResponseEntity.ok(response);
+    }
+}
